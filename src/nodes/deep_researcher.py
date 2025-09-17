@@ -1,9 +1,9 @@
 # File: nodes/deep_researcher.py
 
-import json
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Union
+from langchain_core.runnables import RunnableConfig
 from ..graph.state import State
 
 # --- 1. Define the Action Schemas (mimicking bind_tools) ---
@@ -48,22 +48,17 @@ You operate in a loop:
 Begin.
 """
 
-# # --- Tool Mapping ---
-# known_tools = {
-#     "search_web": get_search_tool(),
-#     "evaluate_expression": get_math_tool()
-# }
-
 # --- LangGraph Nodes and Edges ---
 
-def call_agent_and_parse(state: State) -> State:
+def call_agent_and_parse(state: State, config: RunnableConfig) -> State:
     """Node that calls the LLM, which is structured to output a ReActStep object."""
     print("--- Thực hiện Node: call_agent_and_parse (Hybrid) ---")
     
     # Configure the LLM to use our ReActStep schema
-    llm_with_structure = state["llm"].with_structured_output(ReActStep)
+    llm = config["configurable"]["llm"]
+    llm_with_structure = llm.with_structured_output(ReActStep)
     
-    messages = state["messages"]
+    messages = state["messages"][-6:] if len(state["messages"]) >= 6 else state["messages"]
     if not any(isinstance(m, SystemMessage) for m in messages):
         messages.insert(0, SystemMessage(content=REACT_HYBRID_PROMPT))
 
@@ -75,7 +70,7 @@ def call_agent_and_parse(state: State) -> State:
     # Add the full reasoning and action plan to the message history
     # This gives the agent memory of its previous steps.
     # We add it as a JSON string within an AIMessage.
-    state["messages"].append(AIMessage(content=response.json()))
+    state["messages"].append(AIMessage(content=response.model_dump_json()))
 
     # Check the type of action and update the state
     if isinstance(response.action, FinalAnswer):
@@ -83,7 +78,9 @@ def call_agent_and_parse(state: State) -> State:
         state["answer"] = response.action.answer
         state["parsed_action"] = None # Signal to end the loop
     else: # It's a list of ToolCall objects
-        print(f"🛠️ ACTION: Call Tools {[tc.name for tc in response.action]}")
+        print(f"🛠️ ACTION: Call Tools")
+        for tool_call in response.action:
+            print(f"- Tool: {tool_call.name}, Arguments: {tool_call.arguments}")
         state["parsed_action"] = response.action
 
     return state

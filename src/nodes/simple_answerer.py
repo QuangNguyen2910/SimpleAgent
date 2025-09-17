@@ -1,8 +1,9 @@
 # File: nodes/simple_answerer.py
 
 from langchain_core.messages import SystemMessage, BaseMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from ..graph.state import State
-from typing import List
+from typing import List, Dict, Any
 
 # Merged system prompt for simple chatbot (Không thay đổi)
 SYSTEM_PROMPT = """
@@ -10,11 +11,11 @@ Bạn là một trợ lý trò chuyện thân thiện, trả lời các câu h�
 Hãy trả lời bằng một câu hoặc đoạn ngắn, không cần giải thích trừ khi được yêu cầu. Nếu không có đủ thông tin, trả lời "Tôi không có đủ thông tin để trả lời."
 """
 
-def simple_answerer(state: State) -> State:
+def simple_answerer(state: State, config: RunnableConfig) -> State:
     """NODE: Trả lời câu hỏi đơn giản như một chatbot thông thường."""
     print("--- Thực hiện Node: simple_answerer ---")
     
-    messages = state["messages"][-4:] if len(state["messages"]) >= 4 else state["messages"]
+    messages = state["messages"][-6:] if len(state["messages"]) >= 6 else state["messages"]
     
     prompt_messages: List[BaseMessage] = [
         SystemMessage(content=SYSTEM_PROMPT)
@@ -23,7 +24,8 @@ def simple_answerer(state: State) -> State:
     # --- THAY ĐỔI LỚN: Sử dụng `invoke` thay vì `call_straight` ---
     # `invoke` là phương thức tiêu chuẩn của LangChain để gọi chat model.
     # Nó trả về một đối tượng BaseMessage (thường là AIMessage), không phải chuỗi thô.
-    response = state["llm"].invoke(prompt_messages)
+    llm = config["configurable"]["llm"]
+    response = llm.invoke(prompt_messages)
 
     
     print(f"Trả lời: {response}")

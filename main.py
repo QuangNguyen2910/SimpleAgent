@@ -6,6 +6,7 @@ from src.tools.math_tools import get_math_tool
 from src.tools.search_tools import get_search_tool
 from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
+from langgraph.checkpoint.mongodb import MongoDBSaver
 import os
 
 def main():
@@ -23,47 +24,55 @@ def main():
         base_url=["https://generativelanguage.googleapis.com/v1beta/openai/"]
     )
 
-    # Initialize tools
-    tools = [get_search_tool(), get_math_tool()]
+    DB_URI = "mongodb+srv://quangnguyen711:Quangquan1234@cluster0.ydpweoi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+    with MongoDBSaver.from_conn_string(DB_URI) as checkpointer:
+        # Initialize tools
+        tools = [get_search_tool(), get_math_tool()]
 
-    # Build the graph once
-    graph = build_graph()
+        # Build the graph once
+        graph = build_graph(checkpointer=checkpointer)
 
-    # List to store the history of messages
-    messages = []
+        conversation_id = "1"
 
-    print("Chatbot is ready. Type 'exit' or 'quit' to end the conversation.")
-    while True:
-        # Get user input from the console
-        question = input("You: ")
-
-        # Check if the user wants to exit
-        if question.lower() in ["exit", "quit"]:
-            print("Goodbye!")
-            break
-
-        # Append the new user message to the history
-        messages.append(HumanMessage(content=question))
-
-        # Define the initial state for this turn of the conversation
-        initial_state: State = {
-            "llm": llm,
-            "tools": tools,
-            "messages": messages,
+        config = {
+            "configurable": {
+                "llm": llm,
+                "tools": tools,
+                "thread_id": conversation_id,
+            }
         }
 
-        # Run the graph with the current state
-        final_state = graph.invoke(initial_state)
+        # List to store the history of messages
+        # messages = []
 
-        # The graph should return the updated message list (including the AI's response)
-        # We update our history for the next turn
-        messages = final_state.get("messages", [])
-        
-        # Get the latest message from the assistant to print as the answer
-        answer = messages[-1].content if messages else "Tôi không có đủ thông tin để trả lời."
+        print(f"Chatbot is ready. Conversation ID: {conversation_id}")
+        print("Chatbot is ready. Type 'exit' or 'quit' to end the conversation.")
+        while True:
+            # Get user input from the console
+            question = input("You: ")
 
-        # Print the final result for this turn
-        print(f"Bot: {answer}")
+            # Check if the user wants to exit
+            if question.lower() in ["exit", "quit"]:
+                print("Goodbye!")
+                break
+
+            # Append the new user message to the history
+            input_message = HumanMessage(content=question)
+
+            # Define the initial state for this turn of the conversation
+            initial_state: State = {
+                "messages": [input_message],
+            }
+
+            # Run the graph with the current state
+            final_state = graph.invoke(initial_state, config)
+
+            # The graph should return the updated message list (including the AI's response)
+            # We update our history for the next turn
+            answer = final_state.get("answer", [])
+
+            # Print the final result for this turn
+            print(f"Bot: {answer}")
 
 
 if __name__ == "__main__":

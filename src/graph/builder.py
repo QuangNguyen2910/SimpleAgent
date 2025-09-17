@@ -4,6 +4,7 @@ from .state import State
 from ..nodes.selector import select_node
 from ..nodes.simple_answerer import simple_answerer
 from ..nodes.deep_researcher import call_agent_and_parse, execute_tool
+from langgraph.checkpoint.base import BaseCheckpointSaver # For type hinting
 
 def should_answer(state: State) -> str:
     """Conditional edge to decide whether to answer simply or do deep research."""
@@ -19,7 +20,7 @@ def should_continue(state: State) -> str:
     else:
         return END
 
-def build_graph():
+def build_graph(checkpointer: BaseCheckpointSaver) -> StateGraph:
     # Define the graph
     graph_builder = StateGraph(State)
     
@@ -53,4 +54,4 @@ def build_graph():
     )
     graph_builder.add_edge("tool_executor", "agent_step")
 
-    return graph_builder.compile()
+    return graph_builder.compile(checkpointer=checkpointer)

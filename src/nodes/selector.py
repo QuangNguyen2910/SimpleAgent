@@ -1,8 +1,9 @@
 # File: nodes/selector.py
 
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Dict, Any
 
 from ..graph.state import State
 
@@ -32,7 +33,7 @@ class Decision(BaseModel):
         description="Lựa chọn phải là 'normal' hoặc 'deep_research'."
     )
 
-def select_node(state: State) -> State:
+def select_node(state: State, config: RunnableConfig) -> State:
     """NODE SELECTOR: Quyết định cách xử lý dựa trên câu hỏi."""
     print("--- Thực hiện Node: select_node ---")
     
@@ -54,7 +55,8 @@ def select_node(state: State) -> State:
     
     # --- THAY ĐỔI LỚN 2: Sử dụng with_structured_output và invoke ---
     # 1. Tạo một instance LLM mới được "ràng buộc" với schema Decision của chúng ta.
-    structured_llm = state["llm"].with_structured_output(Decision)
+    llm = config["configurable"]["llm"]
+    structured_llm = llm.with_structured_output(Decision)
     
     # 2. Gọi LLM. LangChain sẽ tự động xử lý việc ép LLM trả về JSON và parse nó.
     # Không còn `try-except` để parse JSON nữa!
