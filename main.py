@@ -6,15 +6,19 @@ from src.tools.math_tools import get_math_tool
 from src.tools.search_tools import get_search_tool
 from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
-from langgraph.checkpoint.mongodb import MongoDBSaver
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
+from langgraph.store.base import BaseStore
+from langchain_community.embeddings import HuggingFaceEmbeddings
 import os
+
+
 
 def main():
     # Load variables from .env file
     load_dotenv()
 
     # Initialize the LLM.
-    # NOTE: Corrected model name to 'gemini-1.5-flash' and removed the incorrect 'base_url'.
     # The library will handle the correct API endpoint automatically.
     # Khởi tạo trạng thái ban đầu
     llm = LLM(
@@ -24,55 +28,69 @@ def main():
         base_url=["https://generativelanguage.googleapis.com/v1beta/openai/"]
     )
 
-    DB_URI = "mongodb+srv://quangnguyen711:Quangquan1234@cluster0.ydpweoi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-    with MongoDBSaver.from_conn_string(DB_URI) as checkpointer:
-        # Initialize tools
-        tools = [get_search_tool(), get_math_tool()]
+    # Initialize the embeddings model
+    embeddings = HuggingFaceEmbeddings(model_name="keepitreal/vietnamese-sbert")
 
-        # Build the graph once
-        graph = build_graph(checkpointer=checkpointer)
+    checkpointer = InMemorySaver()
+    store = InMemoryStore(
+        index={
+            "embed": embeddings,
+            "dims": 768,
+        }
+    )
 
-        conversation_id = "1"
+    store.put(("1", "memories"), "1", {"text": "Tôi thích pizza"})
+    store.put(("1", "memories"), "1", {"text": "Tôi là dân công nghệ thông tin"})
 
-        config = {
-            "configurable": {
-                "llm": llm,
-                "tools": tools,
-                "thread_id": conversation_id,
-            }
+    # Initialize tools
+    tools = [get_search_tool(), get_math_tool()]
+
+    # Build the graph once
+    graph = build_graph(checkpointer=checkpointer, store=store)
+
+    conversation_id = "1"
+    bot_instruct_id = "1"
+
+    config = {
+        "configurable": {
+            "llm": llm,
+            "tools": tools,
+            "thread_id": conversation_id,
+            "user_id": bot_instruct_id,
+        }
+    }
+
+    # List to store the history of messages
+    # messages = []
+
+    print(f"Chatbot is ready. Conversation ID: {conversation_id}")
+    print("Chatbot is ready. Type 'exit' or 'quit' to end the conversation.")
+    while True:
+        # Get user input from the console
+        question = input("You: ")
+
+        # Check if the user wants to exit
+        if question.lower() in ["exit", "quit"]:
+            print("Goodbye!")
+            break
+
+        # Append the new user message to the history
+        input_message = HumanMessage(content=question)
+
+        # Define the initial state for this turn of the conversation
+        initial_state: State = {
+            "messages": [input_message],
         }
 
-        # List to store the history of messages
-        # messages = []
+        # Run the graph with the current state
+        final_state = graph.invoke(initial_state, config)
 
-        print(f"Chatbot is ready. Conversation ID: {conversation_id}")
-        print("Chatbot is ready. Type 'exit' or 'quit' to end the conversation.")
-        while True:
-            # Get user input from the console
-            question = input("You: ")
+        # The graph should return the updated message list (including the AI's response)
+        # We update our history for the next turn
+        answer = final_state.get("answer", [])
 
-            # Check if the user wants to exit
-            if question.lower() in ["exit", "quit"]:
-                print("Goodbye!")
-                break
-
-            # Append the new user message to the history
-            input_message = HumanMessage(content=question)
-
-            # Define the initial state for this turn of the conversation
-            initial_state: State = {
-                "messages": [input_message],
-            }
-
-            # Run the graph with the current state
-            final_state = graph.invoke(initial_state, config)
-
-            # The graph should return the updated message list (including the AI's response)
-            # We update our history for the next turn
-            answer = final_state.get("answer", [])
-
-            # Print the final result for this turn
-            print(f"Bot: {answer}")
+        # Print the final result for this turn
+        print(f"Bot: {answer}")
 
 
 if __name__ == "__main__":

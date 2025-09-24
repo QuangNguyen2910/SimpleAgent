@@ -13,3 +13,4 @@ class State(TypedDict):
     answer: Optional[str]
     decision: Optional[str]  # "normal" hoặc "deep_research"
     parsed_action: Optional[List[Any]] # Use Any to avoid circular import, or define ToolCall here
+    save_mem_rotation: Optional[int]

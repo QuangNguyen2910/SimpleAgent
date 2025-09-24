@@ -4,7 +4,9 @@ from .state import State
 from ..nodes.selector import select_node
 from ..nodes.simple_answerer import simple_answerer
 from ..nodes.deep_researcher import call_agent_and_parse, execute_tool
-from langgraph.checkpoint.base import BaseCheckpointSaver # For type hinting
+from ..nodes.memory_updater import memory_updater
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
 
 def should_answer(state: State) -> str:
     """Conditional edge to decide whether to answer simply or do deep research."""
@@ -20,7 +22,7 @@ def should_continue(state: State) -> str:
     else:
         return END
 
-def build_graph(checkpointer: BaseCheckpointSaver) -> StateGraph:
+def build_graph(checkpointer: BaseCheckpointSaver, store: BaseStore) -> StateGraph:
     # Define the graph
     graph_builder = StateGraph(State)
     
@@ -28,13 +30,15 @@ def build_graph(checkpointer: BaseCheckpointSaver) -> StateGraph:
     # graph_builder.set_config({'recursion_limit': 50})
     
     # Add nodes
+    graph_builder.add_node("memory_updater", memory_updater)
     graph_builder.add_node("select_node", select_node)
     graph_builder.add_node("simple_answerer", simple_answerer)
     graph_builder.add_node("agent_step", call_agent_and_parse)
     graph_builder.add_node("tool_executor", execute_tool)
 
     # Define edges
-    graph_builder.add_edge(START, "select_node")
+    graph_builder.add_edge(START, "memory_updater")
+    graph_builder.add_edge("memory_updater", "select_node")
     graph_builder.add_conditional_edges(
         "select_node", 
         should_answer,
@@ -54,4 +58,4 @@ def build_graph(checkpointer: BaseCheckpointSaver) -> StateGraph:
     )
     graph_builder.add_edge("tool_executor", "agent_step")
 
-    return graph_builder.compile(checkpointer=checkpointer)
+    return graph_builder.compile(checkpointer=checkpointer, store=store)

@@ -4,6 +4,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 from typing import Literal, Dict, Any
+from langgraph.store.base import BaseStore
 
 from ..graph.state import State
 
