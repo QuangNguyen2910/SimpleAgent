@@ -43,7 +43,7 @@ def search_web(query: str) -> str:
         search_results = tavily_client.search(
             query=query, 
             search_depth="basic", # "basic" cho tốc độ, "advanced" cho chi tiết
-            max_results=5
+            max_results=3
         )
     except Exception as e:
         return f"Đã xảy ra lỗi khi gọi Tavily API: {e}"

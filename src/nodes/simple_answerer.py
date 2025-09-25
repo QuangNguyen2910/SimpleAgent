@@ -21,7 +21,7 @@ def simple_answerer(state: State, config: RunnableConfig, store: BaseStore) -> S
     print("--- Thực hiện Node: simple_answerer ---")
 
     user_id = config["configurable"]["user_id"]
-    namespace = ("memories", user_id)
+    namespace = (user_id, "memories")
     memories = store.search(namespace, query=str(state["messages"][-1].content), limit=3)
     info = "\n".join([d.value["data"] for d in memories])
 

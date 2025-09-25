@@ -1,66 +1,81 @@
-# File: nodes/simple_answerer.py
-
-from langchain_core.messages import SystemMessage, BaseMessage, HumanMessage
+import uuid
+from typing import List, Dict
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from ..graph.state import State
-from typing import Literal, Dict, Any, List
 from langgraph.store.base import BaseStore
-from pydantic import BaseModel, Field
-import uuid
 
-# Merged system prompt for simple chatbot (Không thay đổi)
-SYSTEM_PROMPT_MEMORY_UPDATER = """
-Bạn là một người tốt trong việc trích xuất nội dung, yêu cầu cá nhân của người dùng từ cuộc hội thoại để lưu trữ về sau.
+# --- 1. NEW, more focused prompt ---
+MEMORY_UPDATER_PROMPT = """Bạn là một agent quản lý bộ nhớ.
+Bạn đã nhận được một nhiệm vụ về việc cập nhật bộ nhớ.
 
-Một số thông tin hiện tại từ người dùng:
+Kế hoạch của bạn là thực thi nhiệm vụ này một cách chính xác:
+-  Nếu có thông tin cũ tương hỗ với thông tin mới, sử dụng `delete_memory` với ID bạn tìm được để xóa thông tin cũ.
+-  Sử dụng `write_memory` để lưu thông tin mới, chính xác như trong nhiệm vụ.
+
+**Các công cụ có sẵn:**
+- `write_memory(content: str)`
+- `delete_memory(memory_id: str)`
+
+Một số thông tin/yêu cầu trước đây từ người dùng:
 {user_info}
+
+Hãy bắt đầu.
 """
 
-# --- Định nghĩa Schema cho Output ---
-# Chúng ta tạo một Pydantic model để định nghĩa cấu trúc JSON mà LLM phải trả về.
-class NewInstruction(BaseModel):
-    """Tóm tắt lại yêu cầu của người dùng qua đoạn hội thoại."""
-    new_instruction: str = Field(
-        description="Yêu cầu ngắn gọn của người dùng theo hội thoại."
-    )
-
+# --- 2. The Agent Logic (Updated to use the summary) ---
 def memory_updater(state: State, config: RunnableConfig, store: BaseStore) -> State:
-    """NODE: Trả lời câu hỏi đơn giản như một chatbot thông thường."""
+    """Node gọi LLM để thực hiện các tác vụ quản lý bộ nhớ DỰA TRÊN TÓM TẮT."""
     print("--- Thực hiện Node: memory_updater ---")
 
+    query = state.get("memory_summary")
+    if not query:
+        print("Cảnh báo: Không có tóm tắt bộ nhớ. Bỏ qua cập nhật.")
+        state["parsed_action"] = None # Signal completion
+        return state
+
     user_id = config["configurable"]["user_id"]
-    namespace = ("memories", user_id)
-    memories = store.search(namespace, query=str(state["messages"][-1].content), limit=3)
-    user_info = "\n".join([d.value["data"] for d in memories])
-    print(user_info)
+    memory_tools = config["configurable"]["memory_tools"]
+    known_tools = {tool.name: tool for tool in memory_tools} if memory_tools else {}
+    namespace = (user_id, "memories")
+    query = state["memory_summary"]
+    memories = store.search(namespace, query=query, limit=5)
+    user_info = "\n".join([f"ID: {d.key}, Nội dung: {d.value['data']}" for d in memories])
 
-    messages = state["messages"][-6:] if len(state["messages"]) >= 6 else state["messages"]
+    llm = config["configurable"]["llm"]
+    llm_with_tools = llm.bind_tools(memory_tools)
+    
+    # The context is now just the prompt with the summary, not the whole message history
+    prompt = MEMORY_UPDATER_PROMPT.format(user_info=user_info)
+    messages = [SystemMessage(content=prompt)] + [HumanMessage(content=f"Thông tin cần lưu vào bộ nhớ: {query}")]
+    
+    response = llm_with_tools.invoke(messages)
+    print(f"\nPhản hồi từ memory_updater: {response}")
 
-    # Store new memories if the user asks the model to remember
-    last_message = messages[-1]
+    if not response.tool_calls:
+        print("Cảnh báo: memory_updater không yêu cầu gọi công cụ nào.")
+        return state
 
-    if "remember" in last_message.content.lower() or "nhớ" in last_message.content.lower():    
-        prompt_messages: List[BaseMessage] = [
-            SystemMessage(content=SYSTEM_PROMPT_MEMORY_UPDATER.format(user_info=user_info))
-        ] + messages
-        
-        # --- Sử dụng with_structured_output và invoke ---
-        # 1. Tạo một instance LLM mới được "ràng buộc" với schema Decision của chúng ta.
-        llm = config["configurable"]["llm"]
-        structured_llm = llm.with_structured_output(NewInstruction)
-        
-        # 2. Gọi LLM. LangChain sẽ tự động xử lý việc ép LLM trả về JSON và parse nó.
-        # Không còn `try-except` để parse JSON nữa!
-        try:
-            response_object = structured_llm.invoke(prompt_messages)
-            new_instruction = response_object.new_instruction
-        except Exception as e:
-            # Xử lý lỗi nếu LLM không thể trả về đúng định dạng sau nhiều lần thử
-            print(f"LỖI: LLM không thể tạo output có cấu trúc. Lỗi: {e}. Sử dụng fallback.")
-            return state
-
-        print(f"Yêu cầu mới từ người dùng: {new_instruction}")
-
-        store.put(namespace, str(uuid.uuid4()), {"data": new_instruction})  
+    tool_calls: List[Dict] = response.tool_calls
+    for tool_call in tool_calls:
+        tool_name = tool_call["name"]
+        tool_args = tool_call["args"]
+        tool_object = known_tools.get(tool_name)
+        if not tool_object:
+            print(f"Lỗi: Không tìm thấy công cụ '{tool_name}'.")
+        else:
+            try:
+                # Get the actual Python function from the tool object
+                raw_function = tool_object.func
+                
+                # Call the function directly, providing the extra args it needs
+                result = raw_function(
+                    **tool_args,      # Unpacks {'memory_id': '1'}
+                    user_id=user_id,  # Add the user_id
+                    store=store       # Add the store object
+                )
+                print(f"Thực thi thành công công cụ {tool_name}: {result}")
+            except Exception as e:
+                print(f"Lỗi khi thực thi công cụ {tool_name}: {e}")
     
     return state

@@ -1,11 +1,12 @@
 # Tệp: nodes/deep_researcher.py
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage 
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Union
 from langchain_core.runnables import RunnableConfig
 from ..graph.state import State
 from langgraph.store.base import BaseStore
+import uuid
 
 # --- 1. Định nghĩa các Lược đồ Hành động (bắt chước bind_tools) ---
 
@@ -58,12 +59,12 @@ def call_agent_and_parse(state: State, config: RunnableConfig, store: BaseStore)
     """Node gọi LLM, được cấu trúc để xuất ra một đối tượng ReActStep."""
     print("--- Thực hiện Node: call_agent_and_parse (Hybrid) ---")
 
+    # ... (phần lấy user_info không thay đổi) ...
     user_id = config["configurable"]["user_id"]
-    namespace = ("memories", user_id)
+    namespace = (user_id, "memories")
     memories = store.search(namespace, query=str(state["messages"][-1].content))
     user_info = "\n".join([d.value["data"] for d in memories])
 
-    # Cấu hình LLM để sử dụng lược đồ ReActStep của chúng ta
     llm = config["configurable"]["llm"]
     llm_with_structure = llm.with_structured_output(ReActStep)
     
@@ -71,56 +72,74 @@ def call_agent_and_parse(state: State, config: RunnableConfig, store: BaseStore)
     if not any(isinstance(m, SystemMessage) for m in messages):
         messages.insert(0, SystemMessage(content=REACT_HYBRID_PROMPT.format(user_info=user_info)))
 
-    # Gọi LLM
     response: ReActStep = llm_with_structure.invoke(messages)
     
     print(f"\n🤔 LÝ LUẬN: {response.reasoning}")
     
-    # Thêm toàn bộ lý luận và kế hoạch hành động vào lịch sử tin nhắn
-    # Điều này cung cấp cho agent bộ nhớ về các bước trước đó.
-    # Chúng ta thêm nó dưới dạng một chuỗi JSON trong một AIMessage.
-    state["messages"].append(AIMessage(content=response.model_dump_json()))
-
     # Kiểm tra loại hành động và cập nhật trạng thái
     if isinstance(response.action, FinalAnswer):
-        print(f"✅ HÀNH ĐỘNG: Câu trả lời cuối cùng")
+        print(f"✅ HÀNH ĐỘỘNG: Câu trả lời cuối cùng")
+        # Thêm AIMessage chứa lý luận và câu trả lời cuối cùng
+        final_ai_message = AIMessage(content=f"Lý luận:\n{response.reasoning}\n\nCâu trả lời cuối cùng:\n{response.action.answer}")
+        state["messages"].append(final_ai_message)
         state["answer"] = response.action.answer
         state["parsed_action"] = None # Tín hiệu để kết thúc vòng lặp
     else: # Đây là một danh sách các đối tượng ToolCall
         print(f"🛠️ HÀNH ĐỘNG: Gọi Công cụ")
-        for tool_call in response.action:
-            print(f"- Công cụ: {tool_call.name}, Đối số: {tool_call.arguments}")
-        state["parsed_action"] = response.action
+        # *** THAY ĐỔI CHÍNH Ở ĐÂY ***
+        # Tạo tool_calls với ID duy nhất cho mỗi lệnh gọi
+        tool_calls = []
+        for tool_call_action in response.action:
+            tool_calls.append({
+                "name": tool_call_action.name,
+                "args": tool_call_action.arguments,
+                "id": str(uuid.uuid4()) # Tạo ID duy nhất
+            })
+            print(f"- Công cụ: {tool_call_action.name}, Đối số: {tool_call_action.arguments}, ID: {tool_calls[-1]['id']}")
+
+        # Tạo một AIMessage chứa cả lý luận và các lệnh gọi công cụ có cấu trúc
+        ai_message_with_tools = AIMessage(
+            content=response.reasoning, # Chỉ chứa lý luận ở đây
+            tool_calls=tool_calls
+        )
+        state["messages"].append(ai_message_with_tools)
+        state["parsed_action"] = tool_calls # Chuyển các lệnh gọi công cụ có cấu trúc (với ID)
 
     return state
 
 
-def execute_tool(state: State) -> State:
-    """Node thực thi các lệnh gọi công cụ đã được phân tích cú pháp bởi node trước đó."""
+def execute_tool(state: State, config: RunnableConfig) -> State:
+    """Node thực thi các lệnh gọi công cụ và trả về các ToolMessage."""
     print("--- Thực hiện Node: execute_tool (Hybrid) ---")
-    tool_calls: List[ToolCall] = state["parsed_action"]
-    known_tools = {tool.name: tool for tool in state["tools"]} if state.get("tools") else {}
     
-    observations = []
+    tool_calls: List[Dict] = state["parsed_action"]
+    known_tools = {tool.name: tool for tool in config["configurable"]["research_tools"]} if config["configurable"]["research_tools"] else {}
+    
+    tool_messages = []
     for tool_call in tool_calls:
-        tool_name = tool_call.name
-        tool_args = tool_call.arguments
+        tool_name = tool_call["name"]
+        tool_args = tool_call["args"]
+        tool_call_id = tool_call["id"]
         
         tool_function = known_tools.get(tool_name)
         if not tool_function:
             observation = f"Lỗi: Không tìm thấy công cụ '{tool_name}'."
         else:
             try:
-                # Phương thức .invoke() của một StructuredTool có thể xử lý một dict các đối số
                 observation = tool_function.invoke(tool_args)
             except Exception as e:
                 observation = f"Lỗi khi thực thi công cụ {tool_name}: {e}"
         
-        observations.append(f"Quan sát từ {tool_name}:\n{observation}")
+        print(f"👁️ QUAN SÁT (từ {tool_name}):\n{observation}")
+        
+        # *** KEY FIX IS HERE ***
+        # Add the 'name' parameter to the ToolMessage constructor.
+        tool_messages.append(ToolMessage(
+            content=str(observation),
+            tool_call_id=tool_call_id,
+            name=tool_name  # <-- This is the required addition for Gemini
+        ))
 
-    # Thêm tất cả các quan sát dưới dạng một HumanMessage duy nhất cho vòng lặp tiếp theo
-    full_observation = "\n---\n".join(observations)
-    print(f"👁️ QUAN SÁT:\n{full_observation}")
-    state["messages"].append(HumanMessage(content=full_observation))
-    state["parsed_action"] = None # Xóa hành động sau khi thực thi
+    state["messages"].extend(tool_messages)
+    state["parsed_action"] = None 
     return state

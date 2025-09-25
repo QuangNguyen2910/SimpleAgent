@@ -4,6 +4,7 @@ from src.model.llm import LLM
 # Import your actual tool functions
 from src.tools.math_tools import get_math_tool
 from src.tools.search_tools import get_search_tool
+from src.tools.memory_tools import get_memory_tools
 from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import InMemorySaver
@@ -39,11 +40,16 @@ def main():
         }
     )
 
-    store.put(("1", "memories"), "1", {"text": "Tôi thích pizza"})
-    store.put(("1", "memories"), "1", {"text": "Tôi là dân công nghệ thông tin"})
+    store.put(("1", "memories"), "1", {"data": "Tôi thích ăn pizza"})
+    store.put(("1", "memories"), "2", {"data": "Tôi là dân công nghệ thông tin, cụ thể thì theo chuyên ngành AI"})
+    store.put(("1", "memories"), "3", {"data": "Tôi là chủ nhiệm của CLB AI tại Học viện Công nghệ Bưu chính Viễn thông, cơ sở Hà Nội"})
+    store.put(("1", "memories"), "4", {"data": "Tôi chuyên về nghiên cứu các mô hình LLM"})
+    store.put(("1", "memories"), "5", {"data": "Tôi thích nghe nhạc và chơi game vào thời gian rảnh"})
+    store.put(("1", "memories"), "6", {"data": "Tôi có một con mèo tên là Miu"})
 
     # Initialize tools
-    tools = [get_search_tool(), get_math_tool()]
+    research_tools = [get_search_tool(), get_math_tool()]
+    memory_tools = get_memory_tools()
 
     # Build the graph once
     graph = build_graph(checkpointer=checkpointer, store=store)
@@ -54,9 +60,11 @@ def main():
     config = {
         "configurable": {
             "llm": llm,
-            "tools": tools,
+            "research_tools": research_tools,
+            "memory_tools": memory_tools,
             "thread_id": conversation_id,
             "user_id": bot_instruct_id,
+
         }
     }
 
